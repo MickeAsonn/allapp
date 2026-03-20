@@ -1,12 +1,11 @@
 
 const e = React.createElement;
 const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-function nextMonthKey(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(n=>parseInt(n,10)); const d=new Date(y, m-1, 1); d.setMonth(d.getMonth()+1); const ny=d.getFullYear(), nm=(d.getMonth()+1).toString().padStart(2,'0'); return ny+"-"+nm; }
+function nextMonthKey(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(n=>parseInt(n,10)); const d=new Date(y,m-1,1); d.setMonth(d.getMonth()+1); const ny=d.getFullYear(), nm=(d.getMonth()+1+'').padStart(2,'0'); return ny+'-'+nm; }
 function km(n){ const v=Number(n); return isFinite(v)?v:0; }
 function calcTripKm(entry){ return Math.max(0, km(entry.toKm)-km(entry.fromKm)); }
 function sortByStartDateTimeAsc(a,b){ const A=(a.startDate||'')+(a.startTime||''); const B=(b.startDate||'')+(b.startTime||''); return A.localeCompare(B); }
 
-// Tankning/Tvätt rows (sorted)
 function buildMonthRowsSorted(month,tankningar,tvattar){
   const selectedTank=tankningar.filter(t=>t.datum && t.datum.startsWith(month));
   const selectedTvatt=tvattar.filter(t=>t.datum && t.datum.startsWith(month));
@@ -18,52 +17,43 @@ function buildMonthRowsSorted(month,tankningar,tvattar){
   return rows;
 }
 
-// Körjournal export data (two sheets: Resor + Sammanställning)
-function buildJournalSheets(month, journal, monthMeta){
+// --- Körjournal: ENDAST ETT BLAD, resor + tom rad + sammanställning ---
+function buildJournalExportRows(month, journal, monthMeta){
   const trips = journal.filter(j=>j.startDate && j.startDate.startsWith(month)).sort(sortByStartDateTimeAsc);
   const tjansteMil = trips.reduce((s,j)=> s + calcTripKm(j), 0);
   const meta = monthMeta[month] || {}; const kmIn = meta.kmIn; const kmOut = meta.kmOut;
-  const totalOdo = (kmOut!=null && kmIn!=null) ? Math.max(0, km(kmOut)-km(kmIn)) : '';
-  const privataMil = (totalOdo!=='' && totalOdo!=null) ? Math.max(0, totalOdo - tjansteMil) : '';
+  const totalOdo = (kmOut!=null && kmIn!=null) ? Math.max(0, km(kmOut)-km(kmIn)) : null;
+  const privataMil = (totalOdo!=null) ? Math.max(0, totalOdo - tjansteMil) : null;
 
-  const rowsTrips = trips.map(t=>({
+  const rows = trips.map(t=>({
     'Startdatum': t.startDate||'', 'Starttid': t.startTime||'', 'Slutdatum': t.endDate||'', 'Sluttid': t.endTime||'',
     'Från km': t.fromKm||'', 'Till km': t.toKm||'', 'Körda km': calcTripKm(t), 'Ärende/Kund': t.arende||''
   }));
-
-  const rowsSummary = [
-    {'Nyckel':'Km in', 'Värde': (kmIn!=null&&kmIn!=='')? kmIn : ''},
-    {'Nyckel':'Km ut', 'Värde': (kmOut!=null&&kmOut!=='')? kmOut : ''},
-    {'Nyckel':'Tjänstemil', 'Värde': tjansteMil},
-    {'Nyckel':'Totalt (km ut - km in)', 'Värde': totalOdo},
-    {'Nyckel':'Privata mil', 'Värde': privataMil}
-  ];
-  return { rowsTrips, rowsSummary };
-}
-
-function writeTwoSheetWorkbook(filename, sheetNameA, rowsA, sheetNameB, rowsB){
-  const wb = XLSX.utils.book_new();
-  const wsA = XLSX.utils.json_to_sheet(rowsA);
-  const wsB = XLSX.utils.json_to_sheet(rowsB);
-  XLSX.utils.book_append_sheet(wb, wsA, sheetNameA);
-  XLSX.utils.book_append_sheet(wb, wsB, sheetNameB);
-  XLSX.writeFile(wb, filename);
+  // tom rad + sammanställning precis under
+  rows.push({});
+  rows.push({'Sammanfattning':'Km in',Värde:kmIn!=null?kmIn:''});
+  rows.push({'Sammanfattning':'Km ut',Värde:kmOut!=null?kmOut:''});
+  rows.push({'Sammanfattning':'Tjänstemil',Värde:tjansteMil});
+  rows.push({'Sammanfattning':'Totalt (km ut - km in)',Värde:totalOdo!=null?totalOdo:''});
+  rows.push({'Sammanfattning':'Privata mil',Värde:privataMil!=null?privataMil:''});
+  return rows;
 }
 
 function exportJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
-  const { rowsTrips, rowsSummary } = buildJournalSheets(month, journal, monthMeta);
-  writeTwoSheetWorkbook('korjournal_'+month+'.xlsx', 'Resor', rowsTrips, 'Sammanställning', rowsSummary);
+  const rows = buildJournalExportRows(month, journal, monthMeta);
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Körjournal '+month);
+  XLSX.writeFile(wb, 'korjournal_'+month+'.xlsx');
 }
 
 async function mailJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
-  const { rowsTrips, rowsSummary } = buildJournalSheets(month, journal, monthMeta);
+  const rows = buildJournalExportRows(month, journal, monthMeta);
+  const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
-  const wsA = XLSX.utils.json_to_sheet(rowsTrips);
-  const wsB = XLSX.utils.json_to_sheet(rowsSummary);
-  XLSX.utils.book_append_sheet(wb, wsA, 'Resor');
-  XLSX.utils.book_append_sheet(wb, wsB, 'Sammanställning');
+  XLSX.utils.book_append_sheet(wb, ws, 'Körjournal '+month);
   const u8 = XLSX.write(wb,{bookType:'xlsx',type:'array'});
   const blob = new Blob([u8],{type:MIME_XLSX});
   const file = new File([blob],'korjournal_'+month+'.xlsx',{type:MIME_XLSX});
@@ -80,24 +70,20 @@ async function mailMonthExcel(month,tankningar,tvattar){ if(!month){alert('Välj
 function Label(text){ return e('label',{style:{fontSize:'16px',fontWeight:'bold',marginTop:'12px',display:'block'}},text); }
 
 function App(){
-  // Data states
   const [tankningar,setTank]=React.useState(JSON.parse(localStorage.getItem('tankningar')||'[]'));
   const [tvattar,setTvatt]=React.useState(JSON.parse(localStorage.getItem('tvattar')||'[]'));
   const [journal,setJournal]=React.useState(JSON.parse(localStorage.getItem('journal')||'[]'));
   const [monthMeta,setMonthMeta]=React.useState(JSON.parse(localStorage.getItem('monthMeta')||'{}'));
 
-  // Forms
   const [tf,setTF]=React.useState({datum:'',tid:'',plats:'',liter:'',matning:''});
   const [vf,setVF]=React.useState({datum:'',tid:''});
   const [jForm,setJForm]=React.useState({startDate:'',startTime:'',endDate:'',endTime:'',fromKm:'',toKm:'',arende:''});
 
-  // Controls
   const [summaryMonth,setSummaryMonth]=React.useState('');
   const [exportMonth,setExportMonth]=React.useState('');
   const [kmInInput,setKmInInput]=React.useState('');
   const [kmOutInput,setKmOutInput]=React.useState('');
 
-  // Edit controls
   const [editType,setEditType]=React.useState('journal');
   const [editDate,setEditDate]=React.useState('');
   const [editIndex,setEditIndex]=React.useState(null);
@@ -107,7 +93,6 @@ function App(){
   React.useEffect(()=>localStorage.setItem('tvattar',JSON.stringify(tvattar)),[tvattar]);
   React.useEffect(()=>localStorage.setItem('journal',JSON.stringify(journal)),[journal]);
   React.useEffect(()=>localStorage.setItem('monthMeta',JSON.stringify(monthMeta)),[monthMeta]);
-
   React.useEffect(()=>{ if('serviceWorker' in navigator){ window.addEventListener('load',()=>{ navigator.serviceWorker.register('./service-worker.js').catch(console.warn); }); } },[]);
 
   function addT(){ if(!tf.datum||!tf.liter||!tf.matning) return; setTank([...tankningar,tf]); setTF({datum:'',tid:'',plats:'',liter:'',matning:''}); }
@@ -124,16 +109,15 @@ function App(){
     return [];
   }
   function startEdit(idx){ setEditIndex(idx); if(editType==='journal') setEditBuffer({...journal[idx]}); if(editType==='tankning') setEditBuffer({...tankningar[idx]}); if(editType==='tvatt') setEditBuffer({...tvattar[idx]}); }
-  function saveEdit(){ if(editIndex==null) return; if(editType==='journal'){ const data=[...journal]; data[editIndex]={...editBuffer, fromKm: km(editBuffer.fromKm), toKm: km(editBuffer.toKm)}; setJournal(data);} else if(editType==='tankning'){ const data=[...tankningar]; data[editIndex]=editBuffer; setTank(data);} else { const data=[...tvattar]; data[editIndex]=editBuffer; setTvatt(data);} setEditIndex(null); setEditBuffer({}); }
+  function saveEdit(){ if(editIndex==null) return; if(editType==='journal'){ const data=[...journal]; data[editIndex]={...editBuffer, fromKm: km(editBuffer.fromKm), toKm: km(editBuffer.toKm)}; setJournal(data);} else if(editType==='tankning'){ const data=[...tankningar]; data[editIndex]= editBuffer; setTank(data);} else { const data=[...tvattar]; data[editIndex]= editBuffer; setTvatt(data);} setEditIndex(null); setEditBuffer({}); }
   function deleteEdit(){ if(editIndex==null) return; if(editType==='journal'){ const data=[...journal]; data.splice(editIndex,1); setJournal(data);} else if(editType==='tankning'){ const data=[...tankningar]; data.splice(editIndex,1); setTank(data);} else { const data=[...tvattar]; data.splice(editIndex,1); setTvatt(data);} setEditIndex(null); setEditBuffer({}); }
 
   return e('div',{style:{padding:'20px',maxWidth:'840px',margin:'auto'}},[
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px'}},[
       e('h1',{style:{fontSize:'26px',margin:0}},'Körjournal'),
-      e('span',{className:'badge'},'v7.3.2')
+      e('span',{className:'badge'},'v7.3.3')
     ]),
 
-    // Körjournal – summering
     e('h2',null,'Körjournal – summering'),
     Label('Välj månad (för summering & vy)'),
     e('select',{value:summaryMonth,onChange:e=>setSummaryMonth(e.target.value)},[
@@ -145,7 +129,6 @@ function App(){
     ]),
     e('button',{onClick:saveMonthOdo,style:{marginTop:'10px',padding:'12px',background:'#22c55e',borderRadius:'8px'}},'Spara månadens mätarställning (för över Km ut → nästa månads Km in)'),
 
-    // Lägg till resa
     e('h3',{style:{marginTop:'16px'}},'Lägg till resa'),
     e('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'10px'}},[
       e('div',null,[ Label('Startdatum'), e('input',{type:'date',value:jForm.startDate,onChange:e=>setJForm({...jForm,startDate:e.target.value})}) ]),
@@ -162,7 +145,6 @@ function App(){
     Label('Ärende/Kund'), e('input',{value:jForm.arende,onChange:e=>setJForm({...jForm,arende:e.target.value})}),
     e('button',{onClick:addTrip,style:{marginTop:'10px',padding:'12px',background:'#2563eb',borderRadius:'8px'}},'Spara resa'),
 
-    // Export
     e('h2',null,'Körjournal – exportera'),
     Label('Välj månad att exportera'),
     e('select',{value:exportMonth,onChange:e=>setExportMonth(e.target.value)},[
@@ -173,7 +155,7 @@ function App(){
       e('button',{onClick:()=>mailJournalMonthExcel(exportMonth, journal, monthMeta),style:{padding:'12px',background:'#0ea5e9',borderRadius:'8px'}},'Maila körjournal')
     ]),
 
-    // Redigera
+    // Redigera sparad post (behålls)
     e('h2',null,'Redigera sparad post'),
     Label('Välj kategori'),
     e('select',{value:editType,onChange:e=>{setEditType(e.target.value); setEditIndex(null); setEditBuffer({});}},[
@@ -218,12 +200,11 @@ function App(){
         Label('Tid'), e('input',{type:'time',value:editBuffer.tid||'',onChange:e=>setEditBuffer({...editBuffer,tid:e.target.value})})
       ]),
       e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginTop:'10px'}},[
-        e('button',{onClick:()=>{ if(editIndex==null) return; if(editType==='journal'){ const data=[...journal]; data[editIndex]={...editBuffer, fromKm: km(editBuffer.fromKm), toKm: km(editBuffer.toKm)}; setJournal(data);} else if(editType==='tankning'){ const data=[...tankningar]; data[editIndex]= editBuffer; setTank(data);} else { const data=[...tvattar]; data[editIndex]= editBuffer; setTvatt(data);} setEditIndex(null); setEditBuffer({}); }, style:{padding:'12px',background:'#22c55e',borderRadius:'8px'}},'Spara ändring'),
-        e('button',{onClick:()=>{ if(editIndex==null) return; if(editType==='journal'){ const data=[...journal]; data.splice(editIndex,1); setJournal(data);} else if(editType==='tankning'){ const data=[...tankningar]; data.splice(editIndex,1); setTank(data);} else { const data=[...tvattar]; data.splice(editIndex,1); setTvatt(data);} setEditIndex(null); setEditBuffer({}); }, style:{padding:'12px',background:'#ef4444',borderRadius:'8px'}},'Radera post')
+        e('button',{onClick:saveEdit, style:{padding:'12px',background:'#22c55e',borderRadius:'8px'}},'Spara ändring'),
+        e('button',{onClick:deleteEdit, style:{padding:'12px',background:'#ef4444',borderRadius:'8px'}},'Radera post')
       ])
     ]) : null,
 
-    // Tankning & Tvätt – formulär & export
     e('h2',null,'Tankning'),
     Label('Datum'), e('input',{type:'date',value:tf.datum,onChange:e=>setTF({...tf,datum:e.target.value})}),
     Label('Tid'), e('input',{type:'time',value:tf.tid,onChange:e=>setTF({...tf,tid:e.target.value})}),
