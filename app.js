@@ -17,32 +17,37 @@ function buildMonthRowsSorted(month,tankningar,tvattar){
   return rows;
 }
 
-// --- Körjournal: ENDAST ETT BLAD, resor + tom rad + sammanställning ---
-function buildJournalExportRows(month, journal, monthMeta){
+// ---------- AOA exporter for Körjournal (one sheet, summary at bottom) ----------
+function buildJournalAOA(month, journal, monthMeta){
   const trips = journal.filter(j=>j.startDate && j.startDate.startsWith(month)).sort(sortByStartDateTimeAsc);
   const tjansteMil = trips.reduce((s,j)=> s + calcTripKm(j), 0);
   const meta = monthMeta[month] || {}; const kmIn = meta.kmIn; const kmOut = meta.kmOut;
-  const totalOdo = (kmOut!=null && kmIn!=null) ? Math.max(0, km(kmOut)-km(kmIn)) : null;
-  const privataMil = (totalOdo!=null) ? Math.max(0, totalOdo - tjansteMil) : null;
+  const totalOdo = (kmOut!=null && kmIn!=null) ? Math.max(0, km(kmOut)-km(kmIn)) : '';
+  const privataMil = (totalOdo!=='' && totalOdo!=null) ? Math.max(0, totalOdo - tjansteMil) : '';
 
-  const rows = trips.map(t=>({
-    'Startdatum': t.startDate||'', 'Starttid': t.startTime||'', 'Slutdatum': t.endDate||'', 'Sluttid': t.endTime||'',
-    'Från km': t.fromKm||'', 'Till km': t.toKm||'', 'Körda km': calcTripKm(t), 'Ärende/Kund': t.arende||''
-  }));
-  // tom rad + sammanställning precis under
-  rows.push({});
-  rows.push({'Sammanfattning':'Km in',Värde:kmIn!=null?kmIn:''});
-  rows.push({'Sammanfattning':'Km ut',Värde:kmOut!=null?kmOut:''});
-  rows.push({'Sammanfattning':'Tjänstemil',Värde:tjansteMil});
-  rows.push({'Sammanfattning':'Totalt (km ut - km in)',Värde:totalOdo!=null?totalOdo:''});
-  rows.push({'Sammanfattning':'Privata mil',Värde:privataMil!=null?privataMil:''});
-  return rows;
+  const header = ['Startdatum','Starttid','Slutdatum','Sluttid','Från km','Till km','Körda km','Ärende/Kund'];
+  const aoa = [ header ];
+  for(const t of trips){
+    aoa.push([
+      t.startDate||'', t.startTime||'', t.endDate||'', t.endTime||'',
+      t.fromKm||'', t.toKm||'', calcTripKm(t), t.arende||''
+    ]);
+  }
+  // blank line then summary table (two columns)
+  aoa.push(['']);
+  aoa.push(['Sammanfattning','Värde']);
+  aoa.push(['Km in', kmIn!=null? kmIn : '']);
+  aoa.push(['Km ut', kmOut!=null? kmOut : '']);
+  aoa.push(['Tjänstemil', tjansteMil]);
+  aoa.push(['Totalt (km ut - km in)', totalOdo]);
+  aoa.push(['Privata mil', privataMil]);
+  return aoa;
 }
 
 function exportJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
-  const rows = buildJournalExportRows(month, journal, monthMeta);
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const aoa = buildJournalAOA(month, journal, monthMeta);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Körjournal '+month);
   XLSX.writeFile(wb, 'korjournal_'+month+'.xlsx');
@@ -50,8 +55,8 @@ function exportJournalMonthExcel(month, journal, monthMeta){
 
 async function mailJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
-  const rows = buildJournalExportRows(month, journal, monthMeta);
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const aoa = buildJournalAOA(month, journal, monthMeta);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Körjournal '+month);
   const u8 = XLSX.write(wb,{bookType:'xlsx',type:'array'});
@@ -115,7 +120,7 @@ function App(){
   return e('div',{style:{padding:'20px',maxWidth:'840px',margin:'auto'}},[
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px'}},[
       e('h1',{style:{fontSize:'26px',margin:0}},'Körjournal'),
-      e('span',{className:'badge'},'v7.3.3')
+      e('span',{className:'badge'},'v7.3.4')
     ]),
 
     e('h2',null,'Körjournal – summering'),
@@ -155,7 +160,7 @@ function App(){
       e('button',{onClick:()=>mailJournalMonthExcel(exportMonth, journal, monthMeta),style:{padding:'12px',background:'#0ea5e9',borderRadius:'8px'}},'Maila körjournal')
     ]),
 
-    // Redigera sparad post (behålls)
+    // Redigera – oförändrat
     e('h2',null,'Redigera sparad post'),
     Label('Välj kategori'),
     e('select',{value:editType,onChange:e=>{setEditType(e.target.value); setEditIndex(null); setEditBuffer({});}},[
