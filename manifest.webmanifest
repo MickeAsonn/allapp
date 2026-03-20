@@ -1,6 +1,6 @@
 {
-  "name": "Tankning & Tvätt",
-  "short_name": "Tankning",
+  "name": "Körjournal",
+  "short_name": "Körjournal",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
