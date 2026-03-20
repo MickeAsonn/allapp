@@ -6,7 +6,7 @@ function km(n){ const v=Number(n); return isFinite(v)?v:0; }
 function calcTripKm(entry){ return Math.max(0, km(entry.toKm)-km(entry.fromKm)); }
 function sortByStartDateTimeAsc(a,b){ const A=(a.startDate||'')+(a.startTime||''); const B=(b.startDate||'')+(b.startTime||''); return A.localeCompare(B); }
 
-// Tankning/Tvätt export rows (sorted by Datum+Tid)
+// Tankning/Tvätt export rows (sorted)
 function buildMonthRowsSorted(month,tankningar,tvattar){
   const selectedTank=tankningar.filter(t=>t.datum && t.datum.startsWith(month));
   const selectedTvatt=tvattar.filter(t=>t.datum && t.datum.startsWith(month));
@@ -35,46 +35,86 @@ async function mailJournalMonthExcel(month, journal, monthMeta){ if(!month){ ale
 function Label(text){ return e('label',{style:{fontSize:'16px',fontWeight:'bold',marginTop:'12px',display:'block'}},text); }
 
 function App(){
-  // Restore states for Tankning/Tvätt
+  // Tankning/Tvätt
   const [tankningar,setTank]=React.useState(JSON.parse(localStorage.getItem('tankningar')||'[]'));
   const [tvattar,setTvatt]=React.useState(JSON.parse(localStorage.getItem('tvattar')||'[]'));
   const [tf,setTF]=React.useState({datum:'',tid:'',plats:'',liter:'',matning:''});
   const [vf,setVF]=React.useState({datum:'',tid:''});
 
-  // Journal states
+  // Journal
   const [journal,setJournal]=React.useState(JSON.parse(localStorage.getItem('journal')||'[]'));
   const [monthMeta,setMonthMeta]=React.useState(JSON.parse(localStorage.getItem('monthMeta')||'{}'));
 
   // Month selectors
-  const [summaryMonth,setSummaryMonth]=React.useState(''); // for summary view
-  const [exportMonth,setExportMonth]=React.useState('');  // for exports (both journal & tank/tvätt)
+  const [summaryMonth,setSummaryMonth]=React.useState('');
+  const [exportMonth,setExportMonth]=React.useState('');
 
   // Journal form
   const [jForm,setJForm]=React.useState({startDate:'',startTime:'',endDate:'',endTime:'',fromKm:'',toKm:'',arende:''});
 
-  // Odo inputs
+  // Odo
   const [kmInInput,setKmInInput]=React.useState('');
   const [kmOutInput,setKmOutInput]=React.useState('');
 
-  // Persist
+  // Edit state
+  const [editType,setEditType]=React.useState('journal'); // 'journal'|'tankning'|'tvatt'
+  const [editDate,setEditDate]=React.useState(''); // YYYY-MM-DD
+  const [editIndex,setEditIndex]=React.useState(null);
+  const [editBuffer,setEditBuffer]=React.useState({});
+
   React.useEffect(()=>localStorage.setItem('tankningar',JSON.stringify(tankningar)),[tankningar]);
   React.useEffect(()=>localStorage.setItem('tvattar',JSON.stringify(tvattar)),[tvattar]);
   React.useEffect(()=>localStorage.setItem('journal',JSON.stringify(journal)),[journal]);
   React.useEffect(()=>localStorage.setItem('monthMeta',JSON.stringify(monthMeta)),[monthMeta]);
-
   React.useEffect(()=>{ if('serviceWorker' in navigator){ window.addEventListener('load',()=>{ navigator.serviceWorker.register('./service-worker.js').catch(console.warn); }); } },[]);
 
-  // Tankning/Tvätt add handlers
+  // Add handlers
   function addT(){ if(!tf.datum||!tf.liter||!tf.matning) return; setTank([...tankningar,tf]); setTF({datum:'',tid:'',plats:'',liter:'',matning:''}); }
   function addV(){ if(!vf.datum) return; setTvatt([...tvattar,vf]); setVF({datum:'',tid:''}); }
-
-  // Journal handlers
   function addTrip(){ if(!jForm.startDate || jForm.fromKm==='' || jForm.toKm===''){ alert('Fyll startdatum, från km och till km'); return; } if(km(jForm.toKm) < km(jForm.fromKm)){ alert('Till km måste vara >= Från km'); return; } const entry={...jForm, fromKm: km(jForm.fromKm), toKm: km(jForm.toKm)}; setJournal([...journal, entry]); setJForm({startDate:'',startTime:'',endDate:'',endTime:'',fromKm:'',toKm:'',arende:''}); }
+
   function saveMonthOdo(){ if(!summaryMonth){ alert('Välj månad'); return; } const meta={...monthMeta}; const cur=meta[summaryMonth]||{}; const newKmIn=kmInInput!==''? km(kmInInput) : cur.kmIn; const newKmOut=kmOutInput!==''? km(kmOutInput) : cur.kmOut; meta[summaryMonth] = { kmIn:newKmIn, kmOut:newKmOut }; if(newKmOut!=null){ const nx=nextMonthKey(summaryMonth); if(nx){ const nxMeta=meta[nx]||{}; nxMeta.kmIn=newKmOut; meta[nx]=nxMeta; } } setMonthMeta(meta); setKmInInput(''); setKmOutInput(''); }
 
   const jSummary = summaryMonth ? (function(){ const trips = journal.filter(j=>j.startDate && j.startDate.startsWith(summaryMonth)).sort(sortByStartDateTimeAsc); const tjansteMil=trips.reduce((s,j)=> s+calcTripKm(j),0); const meta=monthMeta[summaryMonth]||{}; const kmIn=meta.kmIn; const kmOut=meta.kmOut; const totalOdo=(kmOut!=null&&kmIn!=null)?Math.max(0,km(kmOut)-km(kmIn)):null; const privataMil=(totalOdo!=null)?Math.max(0,totalOdo-tjansteMil):null; return {trips,tjansteMil,kmIn,kmOut,totalOdo,privataMil}; })() : null;
 
-  return e('div',{style:{padding:'20px',maxWidth:'780px',margin:'auto'}},[
+  // Edit helpers
+  function getEditList(){
+    if(!editDate) return [];
+    if(editType==='journal') return journal.map((it,i)=>({...it,_i:i})).filter(it=>it.startDate===editDate).sort(sortByStartDateTimeAsc);
+    if(editType==='tankning') return tankningar.map((it,i)=>({...it,_i:i})).filter(it=>it.datum===editDate).sort((a,b)=> (a.datum+(a.tid||'')).localeCompare(b.datum+(b.tid||'')) );
+    if(editType==='tvatt') return tvattar.map((it,i)=>({...it,_i:i})).filter(it=>it.datum===editDate).sort((a,b)=> (a.datum+(a.tid||'')).localeCompare(b.datum+(b.tid||'')) );
+    return [];
+  }
+  function startEdit(idx){
+    setEditIndex(idx);
+    if(editType==='journal') setEditBuffer({...journal[idx]});
+    if(editType==='tankning') setEditBuffer({...tankningar[idx]});
+    if(editType==='tvatt') setEditBuffer({...tvattar[idx]});
+  }
+  function saveEdit(){
+    if(editIndex==null) return;
+    if(editType==='journal'){
+      const data=[...journal]; data[editIndex]= {...editBuffer, fromKm: km(editBuffer.fromKm), toKm: km(editBuffer.toKm)}; setJournal(data);
+    } else if(editType==='tankning'){
+      const data=[...tankningar]; data[editIndex]= editBuffer; setTank(data);
+    } else if(editType==='tvatt'){
+      const data=[...tvattar]; data[editIndex]= editBuffer; setTvatt(data);
+    }
+    setEditIndex(null); setEditBuffer({});
+  }
+  function deleteEdit(){
+    if(editIndex==null) return;
+    if(editType==='journal'){
+      const data=[...journal]; data.splice(editIndex,1); setJournal(data);
+    } else if(editType==='tankning'){
+      const data=[...tankningar]; data.splice(editIndex,1); setTank(data);
+    } else if(editType==='tvatt'){
+      const data=[...tvattar]; data.splice(editIndex,1); setTvatt(data);
+    }
+    setEditIndex(null); setEditBuffer({});
+  }
+
+  return e('div',{style:{padding:'20px',maxWidth:'820px',margin:'auto'}},[
     e('h1',{style:{fontSize:'26px',marginBottom:'20px'}},'Körjournal'),
 
     // KÖRJOURNAL – SUMMERING
@@ -107,12 +147,8 @@ function App(){
     e('button',{onClick:addTrip,style:{marginTop:'10px',padding:'12px',background:'#2563eb',borderRadius:'8px'}},'Spara resa'),
 
     // SUMMERING BOX
-    jSummary ? e('div',{style:{marginTop:'16px',padding:'12px',background:'#111827',borderRadius:'8px'}},[
-      e('div',null,[ e('strong',null,'Km in: '), e('span',null, jSummary.kmIn!=null? jSummary.kmIn+'' : '—') ]),
-      e('div',null,[ e('strong',null,'Km ut: '), e('span',null, jSummary.kmOut!=null? jSummary.kmOut+'' : '—') ]),
-      e('div',null,[ e('strong',null,'Tjänstemil: '), e('span',null, jSummary.tjansteMil+'' ) ]),
-      e('div',null,[ e('strong',null,'Totalt (km ut - km in): '), e('span',null, jSummary.totalOdo!=null? jSummary.totalOdo+'' : '—') ]),
-      e('div',null,[ e('strong',null,'Privata mil: '), e('span',null, jSummary.privataMil!=null? jSummary.privataMil+'' : '—') ])
+    jSummary ? e('div',{className:'list'},[
+      e('div',{className:'item'},[ e('div',null,[ e('strong',null,'Km in: '), e('span',null, jSummary.kmIn!=null? jSummary.kmIn+'' : '—') ]), e('div',null,[ e('strong',null,'Km ut: '), e('span',null, jSummary.kmOut!=null? jSummary.kmOut+'' : '—') ]), e('div',null,[ e('strong',null,'Tjänstemil: '), e('span',null, jSummary.tjansteMil+'' ) ]), e('div',null,[ e('strong',null,'Totalt (km ut - km in): '), e('span',null, jSummary.totalOdo!=null? jSummary.totalOdo+'' : '—') ]), e('div',null,[ e('strong',null,'Privata mil: '), e('span',null, jSummary.privataMil!=null? jSummary.privataMil+'' : '—') ]) ])
     ]) : null,
 
     // KÖRJOURNAL – EXPORT
@@ -125,6 +161,48 @@ function App(){
       e('button',{onClick:()=>exportJournalMonthExcel(exportMonth, journal, monthMeta),style:{padding:'12px',background:'#3b82f6',borderRadius:'8px'}},'Exportera körjournal (Excel)'),
       e('button',{onClick:()=>mailJournalMonthExcel(exportMonth, journal, monthMeta),style:{padding:'12px',background:'#0ea5e9',borderRadius:'8px'}},'Maila körjournal')
     ]),
+
+    // REDIGERA – VÄLJ POST VIA DATUM
+    e('h2',null,'Redigera sparad post'),
+    Label('Välj kategori'),
+    e('select',{value:editType,onChange:e=>{setEditType(e.target.value); setEditIndex(null); setEditBuffer({});}},[
+      e('option',{value:'journal'},'Körjournal'),
+      e('option',{value:'tankning'},'Tankning'),
+      e('option',{value:'tvatt'},'Tvätt')
+    ]),
+    Label('Välj datum att söka på'),
+    e('input',{type:'date',value:editDate,onChange:e=>{setEditDate(e.target.value); setEditIndex(null); setEditBuffer({});}}),
+
+    (function(){ const list=getEditList(); return list.length? e('div',{className:'list'}, list.map((it)=> e('div',{key:it._i,className:'item'},[
+      e('div',null, editType==='journal' ? `${it.startDate} ${it.startTime||''} → ${it.endDate||''} ${it.endTime||''} • ${it.arende||''} • ${it.fromKm}-${it.toKm} km` : `${it.datum} ${it.tid||''}`),
+      e('button',{onClick:()=>startEdit(it._i), style:{marginTop:'6px',padding:'8px',background:'#374151',borderRadius:'6px'}},'Redigera')
+    ])) ): e('p',{className:'muted'},'Inga poster hittades för valt datum.'); })(),
+
+    (editIndex!=null) ? e('div',{style:{marginTop:'12px',padding:'12px',background:'#0b1220',borderRadius:'10px'}},[
+      e('h3',null,'Redigera'),
+      (editType==='journal') ? e('div',null,[
+        Label('Startdatum'), e('input',{type:'date',value:editBuffer.startDate||'',onChange:e=>setEditBuffer({...editBuffer,startDate:e.target.value})}),
+        Label('Starttid'), e('input',{type:'time',value:editBuffer.startTime||'',onChange:e=>setEditBuffer({...editBuffer,startTime:e.target.value})}),
+        Label('Slutdatum'), e('input',{type:'date',value:editBuffer.endDate||'',onChange:e=>setEditBuffer({...editBuffer,endDate:e.target.value})}),
+        Label('Sluttid'), e('input',{type:'time',value:editBuffer.endTime||'',onChange:e=>setEditBuffer({...editBuffer,endTime:e.target.value})}),
+        Label('Från km'), e('input',{type:'number',value:editBuffer.fromKm, onChange:e=>setEditBuffer({...editBuffer,fromKm:e.target.value})}),
+        Label('Till km'), e('input',{type:'number',value:editBuffer.toKm, onChange:e=>setEditBuffer({...editBuffer,toKm:e.target.value})}),
+        Label('Ärende/Kund'), e('input',{value:editBuffer.arende||'', onChange:e=>setEditBuffer({...editBuffer,arende:e.target.value})})
+      ]) : (editType==='tankning') ? e('div',null,[
+        Label('Datum'), e('input',{type:'date',value:editBuffer.datum||'',onChange:e=>setEditBuffer({...editBuffer,datum:e.target.value})}),
+        Label('Tid'), e('input',{type:'time',value:editBuffer.tid||'',onChange:e=>setEditBuffer({...editBuffer,tid:e.target.value})}),
+        Label('Plats'), e('input',{value:editBuffer.plats||'',onChange:e=>setEditBuffer({...editBuffer,plats:e.target.value})}),
+        Label('Liter'), e('input',{type:'number',value:editBuffer.liter||'',onChange:e=>setEditBuffer({...editBuffer,liter:e.target.value})}),
+        Label('Mätarställning'), e('input',{type:'number',value:editBuffer.matning||'',onChange:e=>setEditBuffer({...editBuffer,matning:e.target.value})})
+      ]) : e('div',null,[
+        Label('Datum'), e('input',{type:'date',value:editBuffer.datum||'',onChange:e=>setEditBuffer({...editBuffer,datum:e.target.value})}),
+        Label('Tid'), e('input',{type:'time',value:editBuffer.tid||'',onChange:e=>setEditBuffer({...editBuffer,tid:e.target.value})})
+      ]),
+      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginTop:'10px'}},[
+        e('button',{onClick:saveEdit,style:{padding:'12px',background:'#22c55e',borderRadius:'8px'}},'Spara ändring'),
+        e('button',{onClick:deleteEdit,style:{padding:'12px',background:'#ef4444',borderRadius:'8px'}},'Radera post')
+      ])
+    ]) : null,
 
     // TANKNING & TVÄTT – FORM + EXPORT
     e('h2',null,'Tankning'),
