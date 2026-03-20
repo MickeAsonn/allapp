@@ -6,23 +6,33 @@ function nextMonthKey(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(n=>p
 function km(n){ const v=Number(n); return isFinite(v)?v:0; }
 function calcTripKm(entry){ return Math.max(0, km(entry.toKm)-km(entry.fromKm)); }
 
-function buildMonthRows(month,tankningar,tvattar){
+/* ---------- SORT HELPERS ---------- */
+function combineDateTimeStr(d,t){ return (d||'') + (t||''); }
+function sortByDateTimeAsc(a,b){ return combineDateTimeStr(a.datum,a.tid).localeCompare(combineDateTimeStr(b.datum,b.tid)); }
+
+/* ---------- Tankning/Tvätt export (sorted) ---------- */
+function buildMonthRowsSorted(month,tankningar,tvattar){
   const selectedTank=tankningar.filter(t=>t.datum && t.datum.startsWith(month));
   const selectedTvatt=tvattar.filter(t=>t.datum && t.datum.startsWith(month));
-  const rows=[];
-  selectedTank.forEach(t=>rows.push({Typ:'Tankning',Datum:t.datum||'',Tid:t.tid||'',Plats:t.plats||'',Liter:t.liter||'', 'Mätarställning':t.matning||'', 'Tvätt':''}));
-  selectedTvatt.forEach(v=>rows.push({Typ:'Tvätt',Datum:v.datum||'',Tid:v.tid||'',Plats:'',Liter:'', 'Mätarställning':'', 'Tvätt':'Ja'}));
+  // Map to unified structure then sort by Datum+Tid
+  const rows=[
+    ...selectedTank.map(t=>({Typ:'Tankning',Datum:t.datum||'',Tid:t.tid||'',Plats:t.plats||'',Liter:t.liter||'', 'Mätarställning':t.matning||'', 'Tvätt':''})),
+    ...selectedTvatt.map(v=>({Typ:'Tvätt',Datum:v.datum||'',Tid:v.tid||'',Plats:'',Liter:'', 'Mätarställning':'', 'Tvätt':'Ja'}))
+  ];
+  rows.sort((ra,rb)=> (ra.Datum+(ra.Tid||'')).localeCompare(rb.Datum+(rb.Tid||'')) );
   return rows;
 }
+
 function exportMonthToExcel(month,tankningar,tvattar){
   if(!month){ alert('Välj månad först'); return; }
-  const rows=buildMonthRows(month,tankningar,tvattar);
+  const rows=buildMonthRowsSorted(month,tankningar,tvattar);
   const ws=XLSX.utils.json_to_sheet(rows);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Export'); XLSX.writeFile(wb,'export_'+month+'.xlsx');
 }
+
 async function mailMonthExcel(month,tankningar,tvattar){
   if(!month){ alert('Välj månad först'); return; }
-  const rows=buildMonthRows(month,tankningar,tvattar);
+  const rows=buildMonthRowsSorted(month,tankningar,tvattar);
   const ws=XLSX.utils.json_to_sheet(rows);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Export');
   const u8 = XLSX.write(wb,{bookType:'xlsx',type:'array'}); const blob = new Blob([u8],{type:MIME_XLSX}); const file = new File([blob],'export_'+month+'.xlsx',{type:MIME_XLSX});
@@ -30,14 +40,16 @@ async function mailMonthExcel(month,tankningar,tvattar){
   XLSX.writeFile(wb,'export_'+month+'.xlsx'); alert('Kopian sparades lokalt.');
 }
 
+/* ---------- Körjournal (sorted export) ---------- */
 function buildJournalSummaryForMonth(month, journal, monthMeta){
-  const trips = journal.filter(j=>j.datum && j.datum.startsWith(month));
+  const trips = journal.filter(j=>j.datum && j.datum.startsWith(month)).sort(sortByDateTimeAsc);
   const tjansteMil = trips.reduce((s,j)=> s + calcTripKm(j), 0);
   const meta = monthMeta[month] || {}; const kmIn = meta.kmIn; const kmOut = meta.kmOut;
   const totalOdo = (kmOut!=null && kmIn!=null) ? Math.max(0, km(kmOut)-km(kmIn)) : null;
   const privataMil = (totalOdo!=null) ? Math.max(0, totalOdo - tjansteMil) : null;
   return { trips, tjansteMil, kmIn, kmOut, totalOdo, privataMil };
 }
+
 function exportJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
   const { trips, tjansteMil, kmIn, kmOut, totalOdo, privataMil } = buildJournalSummaryForMonth(month, journal, monthMeta);
@@ -45,6 +57,7 @@ function exportJournalMonthExcel(month, journal, monthMeta){
   rows.push({}); rows.push({'Sammanfattning':'Km in',Värde:kmIn!=null?kmIn:''}); rows.push({'Sammanfattning':'Km ut',Värde:kmOut!=null?kmOut:''}); rows.push({'Sammanfattning':'Tjänstemil',Värde:tjansteMil}); rows.push({'Sammanfattning':'Totalt (km ut - km in)',Värde:totalOdo!=null?totalOdo:''}); rows.push({'Sammanfattning':'Privata mil',Värde:privataMil!=null?privataMil:''});
   const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Körjournal '+month); XLSX.writeFile(wb, 'korjournal_'+month+'.xlsx');
 }
+
 async function mailJournalMonthExcel(month, journal, monthMeta){
   if(!month){ alert('Välj månad för journalen'); return; }
   const { trips, tjansteMil, kmIn, kmOut, totalOdo, privataMil } = buildJournalSummaryForMonth(month, journal, monthMeta);
@@ -90,7 +103,7 @@ function App(){
   return e('div',{style:{padding:'20px',maxWidth:'720px',margin:'auto'}},[
     e('h1',{style:{fontSize:'26px',marginBottom:'20px'}},'Tankning & Tvätt'),
 
-    /* Körjournal – flyttad överst */
+    /* Körjournal – överst */
     e('h2',{style:{marginTop:'4px'}},'Körjournal'),
     Label('Välj månad (för summering & export)'), e('select',{value:jMonth,onChange:e=>setJMonth(e.target.value)},[
       e('option',{value:''},'Välj månad...'), ...['01','02','03','04','05','06','07','08','09','10','11','12'].map(m=>e('option',{value:'2026-'+m},'2026-'+m))
